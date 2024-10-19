@@ -1,7 +1,10 @@
 syntax = "proto3";
 
 package remote_control_gRPC;
-option go_package = "generated/;remote_control_gRPC";
+option go_package = "generated/remote_control_gRPC";
+option java_multiple_files = true;
+option java_outer_classname = "RemoteControlProto";
+
 
 // 导入必要的 Google Protocol Buffers 类型
 import "proto/empty.proto";
