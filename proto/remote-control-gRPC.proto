@@ -1,0 +1,145 @@
+syntax = "proto3";
+
+package remote_control_gRPC;
+option go_package = "generated/;remote_control_gRPC";
+
+// 导入必要的 Google Protocol Buffers 类型
+import "proto/empty.proto";
+
+////////////////////////////////////////////////////////////////////////////////
+// ID
+
+// XXX: 单独开一个类型表示感兴趣的机器人的 ID。内部结构以后可能会变得更复杂。
+message RobotId {
+  string id = 1;
+}
+
+message UserId {
+  uint32 id = 1;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Command
+
+// XXX: 一个样例指令，摇杆控制机器人移动。
+message VelocityCommand {
+  double linear_x = 1;
+  double angular_z = 2;
+}
+
+// XXX: 控制端发送，被控端接收的指令。
+message CommandRequest {
+  uint32 seq_id = 1; // XXX: 控制端填写的递增序列号。仿 ROS。
+  uint64 stamp = 2; // XXX: 控制端填写的时间戳。
+  RobotId robot_id = 3; // XXX: 感兴趣的被控端。
+  oneof command {
+    VelocityCommand velocity = 4;
+  }
+}
+
+// XXX: 统一命名为 Command。
+message CommandResponse {
+  uint32 seq_id = 1; // XXX: 控制端
+  uint64 stamp = 2; // XXX: 被控端响应指令的时间戳。
+  bool is_success = 3; // XXX: 使用 is_x 的方式命名谓词。
+  // XXX: Command 的回执通常止于是否成功。如有必要，可以再加上一个友好提示。其他的回执应该是不必要的。
+}
+
+// 定义机器人监听指令队列请求（服务器将依靠该请求来建立队列）
+message ListenToCommandQueueRequest {
+  int32 robot_id = 1;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Status
+
+// 定义机器人状态信息
+message Status {
+  // XXX: 序号 1, 2, 3 保留。
+  oneof status {
+    double battery_level = 4;
+    int32 connection_status = 5;
+    string executing_task = 6;
+    bool is_charging = 7;
+    string current_position = 8;
+  }
+}
+
+// XXX
+message PullStatusRequest {
+  RobotId robot_id = 1;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Video
+
+// XXX: PushVideoRequest 没有用到，删掉了。
+
+// 用户客户端从服务器pull车辆特定摄像头的视频流的请求
+message PullVideoRequest {
+  RobotId robot_id = 1;
+  // XXX: 目前该参数仅作为示例。
+  int32 cam_id = 2;
+}
+
+message VideoFrame {
+  // XXX: data 的具体形式目前是 JPEG，可以变成别的，以后再说。
+  bytes data = 1;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Service
+
+// 用户客户端服务
+service UserClientService {
+  // 用户客户端向服务器发送指令
+  // XXX: 仅用于零散指令，例如打开某个东西。Send 比 Push 更看中 Response，更加一一对应。
+  rpc SendCommand (CommandRequest) returns (CommandResponse);
+  // XXX: 用户客户端向服务器发送大量指令，例如摇杆。
+  rpc PushCommand (stream CommandRequest) returns (stream CommandResponse);
+  // 用户客户端从服务器pull视频流
+  rpc PullVideoStream (PullVideoRequest) returns (stream VideoFrame);
+  // XXX: 用户客户端拉取机器人状态。实现时，状态需要是粘性的（sticky, or say, latch）。
+  rpc PullStatus (PullStatusRequest) returns (stream Status);
+  
+  // CYF: 心跳服务，检测连接状态
+  rpc Ping (google.protobuf.Empty) returns (google.protobuf.Empty);
+  
+  // CYF: 认证服务，用户客户端连接上后首先向服务器发送自己的ID信息
+  rpc SendAuthentications (UserId) returns (google.protobuf.Empty);
+  // XXX：以上 API 意味着用户客户端关注的机器人是无状态的，都以参数的形式告知 RobotId。
+}
+
+// 机器人客户端服务
+service RobotClientService {
+  // 机器人向服务器push视频流。
+  // XXX: 当机器人作为服务器时，直接响应 PullVideoStream。
+  rpc PushVideoStream (stream VideoFrame) returns (google.protobuf.Empty);
+
+  // 机器人接收指令
+  // 服务器有一指令队列，机器人从队列中取出指令并执行
+  // 服务器中的指令队列将依靠ListenToCommandQueueRequest请求建立，为每个robot id创建一个队列
+  // XXX: 当机器人作为服务器时，直接响应 PushCommand。
+  rpc PullCommand (stream CommandResponse) returns (stream CommandRequest);
+
+  // 机器人向服务器发送状态
+  // XXX: 通常不用，只使用 PushStatus。
+  // rpc SendStatus (Status) returns (google.protobuf.Empty);
+
+  // XXX: 当机器人作为服务器时，直接响应 PullStatus。
+  rpc PushStatus (stream Status) returns (google.protobuf.Empty);
+
+  // CYF: 心跳服务，检测连接状态
+  rpc Ping (google.protobuf.Empty) returns (google.protobuf.Empty);
+
+  rpc SendAuthentications (RobotId) returns (google.protobuf.Empty);
+
+  // XXX：以上 API 意味着机器人的 ID 以 token 的形式传入，不作为参数。
+}
+
+// 总结：
+// 一次发送一份信息的接口使用 Send 表示，除了非常重视回执的指令，其他都不用 Send。
+// 一次发送多份信息的接口使用 Push 表示。
+// 一次接收多份信息的接口使用 Pull 表示。
+// 如果一个类型是数据，则直接命名，例如 Status, VideoFrame。
+// 如果一个类型有回执，则命名为 Request, Response 对。
