@@ -187,11 +187,10 @@ func (s *userClientServer) PullVideoStream(req *pb.PullVideoRequest, stream pb.U
 	subscriptionNum[req.RobotId.Id] += 1
 	mu.Unlock()
 
-	ctxWithTimeout, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
 	// 等待队列中有数据再开始取数据-发送过程，加入超时机制
 	for {
+		ctxWithTimeout, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
 		select {
 		case <-ctxWithTimeout.Done():
 			log.Printf("Timeout waiting for video frame for robot ID %s", req.RobotId.Id)
@@ -289,21 +288,26 @@ func (s *robotClientServer) SubscribeNotify(req *pb.ListenToSubscriptionRequest,
 // PushVideoStream 实现
 func (s *robotClientServer) PushVideoStream(stream pb.RobotClientService_PushVideoStreamServer) error {
 	for {
-		frame, err := stream.Recv()
+		frameData, err := stream.Recv()
 		if err != nil {
 			log.Printf("Error receiving video frame: %v", err)
 			return err
 		}
+		robotId := frameData.RobotId.Id
+		frame := frameData.Frame
 
-		// 存入视频队列
+		// 存入对应的机器人视频队列
 		mu.Lock()
-		for robotId, videoQueue := range videoQueues {
+		videoQueue, exists := videoQueues[robotId]
+		if exists {
 			// 当队列已满时，弹出队头元素
 			if len(videoQueue) == cap(videoQueue) {
 				<-videoQueue
 			}
 			videoQueue <- frame
 			log.Printf("Added video frame to queue for robot ID %s", robotId)
+		} else {
+			return errors.New("video stream not available for robot")
 		}
 		mu.Unlock()
 	}

@@ -104,6 +104,12 @@ message VideoFrame {
   bytes data = 1;
 }
 
+// CYF： 机器人发送的视频帧消息，包括RobotId和视频帧数据
+message VideoFrameData {
+  RobotId robot_id = 1;
+  VideoFrame frame = 2;
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // Service
 
@@ -137,7 +143,7 @@ service RobotClientService {
   rpc SubscribeNotify (ListenToSubscriptionRequest) returns (stream SubscribedNotification);
   // 机器人向服务器push视频流。
   // XXX: 当机器人作为服务器时，直接响应 PullVideoStream。
-  rpc PushVideoStream (stream VideoFrame) returns (google.protobuf.Empty);
+  rpc PushVideoStream (stream VideoFrameData) returns (google.protobuf.Empty);
 
 
   // 机器人接收指令
