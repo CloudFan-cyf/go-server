@@ -18,7 +18,7 @@ message RobotId {
 }
 
 message UserId {
-  uint32 id = 1;
+  string id = 1;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -84,6 +84,10 @@ message PullVideoRequest {
   // XXX: 目前该参数仅作为示例。
   int32 cam_id = 2;
 }
+//CYF：用户端取消订阅视频流请求
+message CancelVideoSubscriptionRequest {
+  RobotId robot_id = 1;
+}
 
 // CYF:机器人客户端向服务端请求订阅通知流
 message ListenToSubscriptionRequest {
@@ -110,6 +114,8 @@ service UserClientService {
   rpc SendCommand (CommandRequest) returns (CommandResponse);
   // XXX: 用户客户端向服务器发送大量指令，例如摇杆。
   rpc PushCommand (stream CommandRequest) returns (stream CommandResponse);
+  // 用户端取消订阅视频流
+  rpc CancelVideoSubscription (CancelVideoSubscriptionRequest) returns (google.protobuf.Empty);
   // 用户客户端从服务器pull视频流
   rpc PullVideoStream (PullVideoRequest) returns (stream VideoFrame);
   // XXX: 用户客户端拉取机器人状态。实现时，状态需要是粘性的（sticky, or say, latch）。

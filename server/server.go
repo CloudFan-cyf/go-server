@@ -1,4 +1,4 @@
-package server
+package main
 
 import (
 	"context"
@@ -25,12 +25,14 @@ var connectedUsers = make(map[string]*pb.UserId)
 var connectedRobots = make(map[string]*pb.RobotId)
 
 // 指令队列和执行结果队列
-var commandQueues = make(map[string]chan *pb.CommandRequest, 10)
+var commandQueues = make(map[string]chan *pb.CommandRequest)
 var commandResponseQueues = make(map[string]chan *pb.CommandResponse, 10)
 
 // 视频相关队列
-var isSubscribed = make(map[string]bool) // 每个RobotId对应一个订阅状态
+var subscriptionNum = make(map[string]int) // 每个RobotId对应一个订阅数量
 var videoQueues = make(map[string]chan *pb.VideoFrame, 60)
+
+var mu sync.Mutex
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // UserClientService
@@ -38,7 +40,6 @@ var videoQueues = make(map[string]chan *pb.VideoFrame, 60)
 // userClientServer 是 UserClientService 的实现
 type userClientServer struct {
 	pb.UnimplementedUserClientServiceServer
-	mu sync.Mutex
 }
 
 // UserClientService中SendCommand 实现
@@ -49,16 +50,16 @@ type userClientServer struct {
 // 再将结果CommandResponse返回给用户。
 func (s *userClientServer) SendCommand(ctx context.Context, req *pb.CommandRequest) (*pb.CommandResponse, error) {
 	// 检查机器人是否已连接
-	s.mu.Lock()
+	mu.Lock()
 	_, ok := connectedRobots[req.RobotId.Id]
-	s.mu.Unlock()
+	mu.Unlock()
 
 	if !ok {
 		return nil, errors.New("robot not connected")
 	}
 
 	// 检查指令队列是否存在
-	s.mu.Lock()
+	mu.Lock()
 	commandQueue, exists := commandQueues[req.RobotId.Id]
 	if !exists {
 		return nil, errors.New("Robot not connected,or command queue not exist")
@@ -67,15 +68,15 @@ func (s *userClientServer) SendCommand(ctx context.Context, req *pb.CommandReque
 	if !responseExists {
 		return nil, errors.New("robot not connected,or command response queue not exist")
 	}
-	s.mu.Unlock()
+	mu.Unlock()
 
 	// 清空指令队列并放入新的指令
 	// 由于SendCommand方法是用来发送重要指令的，因此需要清空指令队列，保证一定能够被写入
-	s.mu.Lock()
+	mu.Lock()
 	for len(commandQueue) > 0 {
 		<-commandQueue
 	}
-	s.mu.Unlock()
+	mu.Unlock()
 	commandQueue <- req
 	log.Printf("Command added to queue for robot ID %s: Seq ID %d", req.RobotId.Id, req.SeqId)
 
@@ -108,7 +109,7 @@ func (s *userClientServer) PushCommand(stream pb.UserClientService_PushCommandSe
 		}
 		log.Printf("Received stream command for robot ID %s: Seq ID %d, Command: %v", req.RobotId.Id, req.SeqId, req.Command)
 
-		s.mu.Lock()
+		mu.Lock()
 		commandQueue, exists := commandQueues[req.RobotId.Id]
 		if !exists {
 			return errors.New("Robot not connected,or command queue not exist")
@@ -117,7 +118,7 @@ func (s *userClientServer) PushCommand(stream pb.UserClientService_PushCommandSe
 		if !responseExists {
 			return errors.New("robot not connected,or command response queue not exist")
 		}
-		s.mu.Unlock()
+		mu.Unlock()
 
 		// 写入指令队列（非阻塞写入）
 		select {
@@ -150,6 +151,24 @@ func (s *userClientServer) PushCommand(stream pb.UserClientService_PushCommandSe
 	}
 }
 
+// CancelVideoSubscription 实现
+// 用户端取消订阅某个机器人的视频流
+// 服务端在接收到取消订阅请求后，将该机器人的订阅状态减一，并关闭对应的视频队列，
+func (s *userClientServer) CancelVideoSubscription(ctx context.Context, req *pb.CancelVideoSubscriptionRequest) (*emptypb.Empty, error) {
+	log.Printf("Cancelling video subscription for robot ID %s", req.RobotId.Id)
+
+	mu.Lock()
+	if subscriptionNum[req.RobotId.Id] > 0 {
+		subscriptionNum[req.RobotId.Id] -= 1
+		log.Printf("Decremented subscription count for robot ID %s, new count: %d", req.RobotId.Id, subscriptionNum[req.RobotId.Id])
+	} else {
+		log.Printf("No active subscriptions for robot ID %s to cancel", req.RobotId.Id)
+	}
+	mu.Unlock()
+
+	return &emptypb.Empty{}, nil
+}
+
 // PullVideoStream 实现（流式传输视频帧）
 // 服务端接收用户端的PullVideoRequest请求（订阅某个机器人的视频流），返回视频流数据。
 // 服务端在接收用户的订阅请求后，根据PullVideoRequest中的RobotId.Id和CamId，向机器人客户端发送订阅通知
@@ -159,22 +178,28 @@ func (s *userClientServer) PullVideoStream(req *pb.PullVideoRequest, stream pb.U
 	log.Printf("Starting video stream for robot ID %s, camera ID %d", req.RobotId.Id, req.CamId)
 
 	// 检查视频队列是否存在
-	s.mu.Lock()
+	mu.Lock()
 	queue, exists := videoQueues[req.RobotId.Id]
 	if !exists {
-		s.mu.Unlock()
+		mu.Unlock()
 		return errors.New("video stream not available for robot")
 	}
-	videoSubscribers[req.RobotId.Id] = true
-	s.mu.Unlock()
+	subscriptionNum[req.RobotId.Id] += 1
+	mu.Unlock()
 
-	// 源继续从队列取出并发送视频帧
+	ctxWithTimeout, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// 等待队列中有数据再开始取数据-发送过程，加入超时机制
 	for {
 		select {
+		case <-ctxWithTimeout.Done():
+			log.Printf("Timeout waiting for video frame for robot ID %s", req.RobotId.Id)
+			return errors.New("timeout waiting for video frame")
 		case frame, ok := <-queue:
 			if !ok {
-				log.Printf("Video queue for robot ID %s is closed", req.RobotId.Id)
-				return nil
+				log.Printf("Video queue closed for robot ID %s", req.RobotId.Id)
+				return errors.New("video stream closed")
 			}
 			if err := stream.Send(frame); err != nil {
 				log.Printf("Error sending video frame: %v", err)
@@ -210,7 +235,12 @@ func (s *userClientServer) Ping(ctx context.Context, req *emptypb.Empty) (*empty
 // SendAuthentications 实现
 // 用户端连接后发送的第一个请求，用于确认用户ID
 func (s *userClientServer) SendAuthentications(ctx context.Context, req *pb.UserId) (*emptypb.Empty, error) {
-	log.Printf("Received authentication for user ID %d", req.Id)
+	log.Printf("Received authentication for user ID %s", req.Id)
+
+	mu.Lock()
+	connectedUsers[req.Id] = req
+	mu.Unlock()
+
 	return &emptypb.Empty{}, nil
 }
 
@@ -233,22 +263,18 @@ func (s *robotClientServer) SubscribeNotify(req *pb.ListenToSubscriptionRequest,
 
 	for {
 		// 监听订阅状态变化
-		s.mu.Lock()
-		subscribed := isSubscribed[robotId]
-		s.mu.Unlock()
+		mu.Lock()
+		subscribed := subscriptionNum[robotId]
+		mu.Unlock()
 
-		if subscribed {
+		if subscribed != 0 {
 			notification := &pb.SubscribedNotification{
-				RobotId: &pb.RobotId{Id: robotId},
-				Message: "Video stream subscribed",
+				IsSubscribed: true,
 			}
 			if err := stream.Send(notification); err != nil {
 				log.Printf("Error sending subscribed notification to robot ID %s: %v", robotId, err)
 				return err
 			}
-			s.mu.Lock()
-			isSubscribed[robotId] = false // 重置订阅状态
-			s.mu.Unlock()
 		}
 		time.Sleep(1 * time.Second) // 避免过于频繁的轮询
 	}
@@ -260,36 +286,27 @@ func (s *robotClientServer) SubscribeNotify(req *pb.ListenToSubscriptionRequest,
 // 视频流的推送和接收使用订阅制，即用户端向服务器端请求某个RobotId的视频流，服务器端才开始推送视频流。
 // 服务端在每个RobotId对应的videoSubscribers变为true时，向机器人客户端发送订阅通知，
 // 机器人客户端收到订阅通知后，开始向服务端推送视频流数据。
+// PushVideoStream 实现
 func (s *robotClientServer) PushVideoStream(stream pb.RobotClientService_PushVideoStreamServer) error {
-	// Receive RobotId from the stream for identifying the video queue
-	var robotId string
-	if req, err := stream.Recv(); err == nil {
-		s.mu.Lock()
-		videoQueue, exists := videoQueues[robotId]
-		if !exists {
-			s.mu.Unlock()
-			return errors.New("video queue not available for robot")
+	for {
+		frame, err := stream.Recv()
+		if err != nil {
+			log.Printf("Error receiving video frame: %v", err)
+			return err
 		}
-		s.mu.Unlock()
 
-		// Continuously receive video frames and push to the queue
-		for {
-			frame, err := stream.Recv()
-			if err != nil {
-				log.Printf("Error receiving video frame: %v", err)
-				return err
+		// 存入视频队列
+		mu.Lock()
+		for robotId, videoQueue := range videoQueues {
+			// 当队列已满时，弹出队头元素
+			if len(videoQueue) == cap(videoQueue) {
+				<-videoQueue
 			}
-
-			// Push the received frame to the queue (non-blocking)
-			select {
-			case videoQueue <- frame:
-				log.Printf("Received video frame for robot ID %s", robotId)
-			default:
-				log.Printf("Video queue for robot ID %s is full, dropping frame", robotId)
-			}
+			videoQueue <- frame
+			log.Printf("Added video frame to queue for robot ID %s", robotId)
 		}
+		mu.Unlock()
 	}
-	return nil
 }
 
 // PullCommand 实现
@@ -328,8 +345,23 @@ func (s *robotClientServer) Ping(ctx context.Context, req *emptypb.Empty) (*empt
 
 // SendAuthentications 实现
 // Robot端连接后发送的第一个请求，用于确认RobotID
+// 服务端在接收到认证请求后，将该机器人加入连接列表，并建立对应的指令队列、执行结果队列和视频队列、订阅状态
 func (s *robotClientServer) SendAuthentications(ctx context.Context, req *pb.RobotId) (*emptypb.Empty, error) {
-	log.Printf("Received authentication for user ID %d", req.Id)
+	rbtId := req.Id
+	log.Printf("Received authentication for robot ID %s", rbtId)
+	// 将该机器人加入连接列表，并建立对应的指令队列、执行结果队列和视频队列、订阅状态
+	mu.Lock()
+	if _, exists := connectedRobots[rbtId]; exists {
+		log.Printf("Robot ID %s is already connected", rbtId)
+		mu.Unlock()
+		return &emptypb.Empty{}, nil
+	}
+	connectedRobots[rbtId] = req
+	commandQueues[rbtId] = make(chan *pb.CommandRequest, 10)
+	commandResponseQueues[rbtId] = make(chan *pb.CommandResponse, 10)
+	videoQueues[rbtId] = make(chan *pb.VideoFrame, 60)
+	subscriptionNum[rbtId] = 0
+	mu.Unlock()
 	return &emptypb.Empty{}, nil
 }
 

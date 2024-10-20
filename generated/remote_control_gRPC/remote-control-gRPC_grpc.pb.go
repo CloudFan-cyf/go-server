@@ -20,12 +20,13 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	UserClientService_SendCommand_FullMethodName         = "/remote_control_gRPC.UserClientService/SendCommand"
-	UserClientService_PushCommand_FullMethodName         = "/remote_control_gRPC.UserClientService/PushCommand"
-	UserClientService_PullVideoStream_FullMethodName     = "/remote_control_gRPC.UserClientService/PullVideoStream"
-	UserClientService_PullStatus_FullMethodName          = "/remote_control_gRPC.UserClientService/PullStatus"
-	UserClientService_Ping_FullMethodName                = "/remote_control_gRPC.UserClientService/Ping"
-	UserClientService_SendAuthentications_FullMethodName = "/remote_control_gRPC.UserClientService/SendAuthentications"
+	UserClientService_SendCommand_FullMethodName             = "/remote_control_gRPC.UserClientService/SendCommand"
+	UserClientService_PushCommand_FullMethodName             = "/remote_control_gRPC.UserClientService/PushCommand"
+	UserClientService_CancelVideoSubscription_FullMethodName = "/remote_control_gRPC.UserClientService/CancelVideoSubscription"
+	UserClientService_PullVideoStream_FullMethodName         = "/remote_control_gRPC.UserClientService/PullVideoStream"
+	UserClientService_PullStatus_FullMethodName              = "/remote_control_gRPC.UserClientService/PullStatus"
+	UserClientService_Ping_FullMethodName                    = "/remote_control_gRPC.UserClientService/Ping"
+	UserClientService_SendAuthentications_FullMethodName     = "/remote_control_gRPC.UserClientService/SendAuthentications"
 )
 
 // UserClientServiceClient is the client API for UserClientService service.
@@ -39,6 +40,8 @@ type UserClientServiceClient interface {
 	SendCommand(ctx context.Context, in *CommandRequest, opts ...grpc.CallOption) (*CommandResponse, error)
 	// XXX: 用户客户端向服务器发送大量指令，例如摇杆。
 	PushCommand(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[CommandRequest, CommandResponse], error)
+	// 用户端取消订阅视频流
+	CancelVideoSubscription(ctx context.Context, in *CancelVideoSubscriptionRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	// 用户客户端从服务器pull视频流
 	PullVideoStream(ctx context.Context, in *PullVideoRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[VideoFrame], error)
 	// XXX: 用户客户端拉取机器人状态。实现时，状态需要是粘性的（sticky, or say, latch）。
@@ -79,6 +82,16 @@ func (c *userClientServiceClient) PushCommand(ctx context.Context, opts ...grpc.
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type UserClientService_PushCommandClient = grpc.BidiStreamingClient[CommandRequest, CommandResponse]
+
+func (c *userClientServiceClient) CancelVideoSubscription(ctx context.Context, in *CancelVideoSubscriptionRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, UserClientService_CancelVideoSubscription_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
 
 func (c *userClientServiceClient) PullVideoStream(ctx context.Context, in *PullVideoRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[VideoFrame], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -149,6 +162,8 @@ type UserClientServiceServer interface {
 	SendCommand(context.Context, *CommandRequest) (*CommandResponse, error)
 	// XXX: 用户客户端向服务器发送大量指令，例如摇杆。
 	PushCommand(grpc.BidiStreamingServer[CommandRequest, CommandResponse]) error
+	// 用户端取消订阅视频流
+	CancelVideoSubscription(context.Context, *CancelVideoSubscriptionRequest) (*emptypb.Empty, error)
 	// 用户客户端从服务器pull视频流
 	PullVideoStream(*PullVideoRequest, grpc.ServerStreamingServer[VideoFrame]) error
 	// XXX: 用户客户端拉取机器人状态。实现时，状态需要是粘性的（sticky, or say, latch）。
@@ -172,6 +187,9 @@ func (UnimplementedUserClientServiceServer) SendCommand(context.Context, *Comman
 }
 func (UnimplementedUserClientServiceServer) PushCommand(grpc.BidiStreamingServer[CommandRequest, CommandResponse]) error {
 	return status.Errorf(codes.Unimplemented, "method PushCommand not implemented")
+}
+func (UnimplementedUserClientServiceServer) CancelVideoSubscription(context.Context, *CancelVideoSubscriptionRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CancelVideoSubscription not implemented")
 }
 func (UnimplementedUserClientServiceServer) PullVideoStream(*PullVideoRequest, grpc.ServerStreamingServer[VideoFrame]) error {
 	return status.Errorf(codes.Unimplemented, "method PullVideoStream not implemented")
@@ -230,6 +248,24 @@ func _UserClientService_PushCommand_Handler(srv interface{}, stream grpc.ServerS
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type UserClientService_PushCommandServer = grpc.BidiStreamingServer[CommandRequest, CommandResponse]
+
+func _UserClientService_CancelVideoSubscription_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CancelVideoSubscriptionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(UserClientServiceServer).CancelVideoSubscription(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: UserClientService_CancelVideoSubscription_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(UserClientServiceServer).CancelVideoSubscription(ctx, req.(*CancelVideoSubscriptionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
 
 func _UserClientService_PullVideoStream_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(PullVideoRequest)
@@ -299,6 +335,10 @@ var UserClientService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SendCommand",
 			Handler:    _UserClientService_SendCommand_Handler,
+		},
+		{
+			MethodName: "CancelVideoSubscription",
+			Handler:    _UserClientService_CancelVideoSubscription_Handler,
 		},
 		{
 			MethodName: "Ping",
