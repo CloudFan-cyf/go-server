@@ -346,7 +346,7 @@ const (
 type RobotClientServiceClient interface {
 	// 机器人向服务器push视频流。
 	// XXX: 当机器人作为服务器时，直接响应 PullVideoStream。
-	PushVideoStream(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[VideoFrame, emptypb.Empty], error)
+	PushVideoStream(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[VideoFrame, SubscribedNotification], error)
 	// 机器人接收指令
 	// 服务器有一指令队列，机器人从队列中取出指令并执行
 	// 服务器中的指令队列将依靠ListenToCommandQueueRequest请求建立，为每个robot id创建一个队列
@@ -367,18 +367,18 @@ func NewRobotClientServiceClient(cc grpc.ClientConnInterface) RobotClientService
 	return &robotClientServiceClient{cc}
 }
 
-func (c *robotClientServiceClient) PushVideoStream(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[VideoFrame, emptypb.Empty], error) {
+func (c *robotClientServiceClient) PushVideoStream(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[VideoFrame, SubscribedNotification], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &RobotClientService_ServiceDesc.Streams[0], RobotClientService_PushVideoStream_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &grpc.GenericClientStream[VideoFrame, emptypb.Empty]{ClientStream: stream}
+	x := &grpc.GenericClientStream[VideoFrame, SubscribedNotification]{ClientStream: stream}
 	return x, nil
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type RobotClientService_PushVideoStreamClient = grpc.ClientStreamingClient[VideoFrame, emptypb.Empty]
+type RobotClientService_PushVideoStreamClient = grpc.BidiStreamingClient[VideoFrame, SubscribedNotification]
 
 func (c *robotClientServiceClient) PullCommand(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[CommandResponse, CommandRequest], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -434,7 +434,7 @@ func (c *robotClientServiceClient) SendAuthentications(ctx context.Context, in *
 type RobotClientServiceServer interface {
 	// 机器人向服务器push视频流。
 	// XXX: 当机器人作为服务器时，直接响应 PullVideoStream。
-	PushVideoStream(grpc.ClientStreamingServer[VideoFrame, emptypb.Empty]) error
+	PushVideoStream(grpc.BidiStreamingServer[VideoFrame, SubscribedNotification]) error
 	// 机器人接收指令
 	// 服务器有一指令队列，机器人从队列中取出指令并执行
 	// 服务器中的指令队列将依靠ListenToCommandQueueRequest请求建立，为每个robot id创建一个队列
@@ -455,7 +455,7 @@ type RobotClientServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedRobotClientServiceServer struct{}
 
-func (UnimplementedRobotClientServiceServer) PushVideoStream(grpc.ClientStreamingServer[VideoFrame, emptypb.Empty]) error {
+func (UnimplementedRobotClientServiceServer) PushVideoStream(grpc.BidiStreamingServer[VideoFrame, SubscribedNotification]) error {
 	return status.Errorf(codes.Unimplemented, "method PushVideoStream not implemented")
 }
 func (UnimplementedRobotClientServiceServer) PullCommand(grpc.BidiStreamingServer[CommandResponse, CommandRequest]) error {
@@ -492,11 +492,11 @@ func RegisterRobotClientServiceServer(s grpc.ServiceRegistrar, srv RobotClientSe
 }
 
 func _RobotClientService_PushVideoStream_Handler(srv interface{}, stream grpc.ServerStream) error {
-	return srv.(RobotClientServiceServer).PushVideoStream(&grpc.GenericServerStream[VideoFrame, emptypb.Empty]{ServerStream: stream})
+	return srv.(RobotClientServiceServer).PushVideoStream(&grpc.GenericServerStream[VideoFrame, SubscribedNotification]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type RobotClientService_PushVideoStreamServer = grpc.ClientStreamingServer[VideoFrame, emptypb.Empty]
+type RobotClientService_PushVideoStreamServer = grpc.BidiStreamingServer[VideoFrame, SubscribedNotification]
 
 func _RobotClientService_PullCommand_Handler(srv interface{}, stream grpc.ServerStream) error {
 	return srv.(RobotClientServiceServer).PullCommand(&grpc.GenericServerStream[CommandResponse, CommandRequest]{ServerStream: stream})
@@ -568,6 +568,7 @@ var RobotClientService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "PushVideoStream",
 			Handler:       _RobotClientService_PushVideoStream_Handler,
+			ServerStreams: true,
 			ClientStreams: true,
 		},
 		{

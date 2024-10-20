@@ -85,6 +85,11 @@ message PullVideoRequest {
   int32 cam_id = 2;
 }
 
+// CYF: 服务端向机器人发送的订阅通知，表示某机器人已经被用户订阅视频流，通知机器人开始推送视频流
+message SubscribedNotification {
+  int32 cam_id = 1;
+}
+
 message VideoFrame {
   // XXX: data 的具体形式目前是 JPEG，可以变成别的，以后再说。
   bytes data = 1;
@@ -117,7 +122,7 @@ service UserClientService {
 service RobotClientService {
   // 机器人向服务器push视频流。
   // XXX: 当机器人作为服务器时，直接响应 PullVideoStream。
-  rpc PushVideoStream (stream VideoFrame) returns (google.protobuf.Empty);
+  rpc PushVideoStream (stream VideoFrame) returns (stream SubscribedNotification);
 
   // 机器人接收指令
   // 服务器有一指令队列，机器人从队列中取出指令并执行

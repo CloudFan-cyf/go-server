@@ -19,11 +19,18 @@ var (
 	tls      = flag.Bool("tls", false, "Connection uses TLS if true, else plain TCP")
 	certFile = flag.String("cert_file", "", "The TLS cert file")
 )
+
+// 连接列表
 var connectedUsers = make(map[string]*pb.UserId)
 var connectedRobots = make(map[string]*pb.RobotId)
+
+// 指令队列和执行结果队列
 var commandQueues = make(map[string]chan *pb.CommandRequest, 10)
-var commandResponseQueues = make(map[string]chan *pb.CommandResponse)
-var videoQueues = make(map[string]chan *pb.VideoFrame)
+var commandResponseQueues = make(map[string]chan *pb.CommandResponse, 10)
+
+// 视频相关队列
+var videoSubscribers = make(map[string][]*pb.UserId) // 每个RobotId对应一个订阅者列表
+var videoQueues = make(map[string]chan *pb.VideoFrame, 60)
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // UserClientService
