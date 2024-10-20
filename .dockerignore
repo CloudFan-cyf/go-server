@@ -1,0 +1,9 @@
+# 忽略所有本地环境文件
+.env
+.git
+node_modules
+Dockerfile
+*.log
+*.swp
+.idea
+*.test
