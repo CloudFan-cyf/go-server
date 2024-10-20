@@ -29,7 +29,7 @@ var commandQueues = make(map[string]chan *pb.CommandRequest, 10)
 var commandResponseQueues = make(map[string]chan *pb.CommandResponse, 10)
 
 // 视频相关队列
-var videoSubscribers = make(map[string][]*pb.UserId) // 每个RobotId对应一个订阅者列表
+var isSubscribed = make(map[string]bool) // 每个RobotId对应一个订阅状态
 var videoQueues = make(map[string]chan *pb.VideoFrame, 60)
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -165,16 +165,23 @@ func (s *userClientServer) PullVideoStream(req *pb.PullVideoRequest, stream pb.U
 		s.mu.Unlock()
 		return errors.New("video stream not available for robot")
 	}
+	videoSubscribers[req.RobotId.Id] = true
 	s.mu.Unlock()
 
 	// 源继续从队列取出并发送视频帧
-	for frame := range queue {
-		if err := stream.Send(frame); err != nil {
-			log.Printf("Error sending video frame: %v", err)
-			return err
+	for {
+		select {
+		case frame, ok := <-queue:
+			if !ok {
+				log.Printf("Video queue for robot ID %s is closed", req.RobotId.Id)
+				return nil
+			}
+			if err := stream.Send(frame); err != nil {
+				log.Printf("Error sending video frame: %v", err)
+				return err
+			}
 		}
 	}
-	return nil
 }
 
 // PullStatus 实现
@@ -213,23 +220,53 @@ func (s *userClientServer) SendAuthentications(ctx context.Context, req *pb.User
 // robotClientServer 是 RobotClientService 的实现
 type robotClientServer struct {
 	pb.UnimplementedRobotClientServiceServer
-	connectedRobots []*pb.RobotId
+	mu sync.Mutex
+}
+
+// SubscribeNotify 实现
+// 机器人连接认证后发送的请求，用于请求建立订阅通知流
+// 服务端在RobotId对应的videoSubscribers变为true时，向机器人客户端发送订阅通知，
+// 机器人客户端收到订阅通知后，开始向服务端推送视频流数据。
+func (s *robotClientServer) SubscribeNotify(stream pb.RobotClientService_SubscribeNotifyServer) error {
+
 }
 
 // PushVideoStream 实现
 // 服务端从机器人端以BidirectionalStreaming RPC的方法接收机器人的连续JPEG视频帧VideoFrame，
 // 将其放入视频帧缓冲队列中，供用户端PullVideoStream方法取出。
 // 视频流的推送和接收使用订阅制，即用户端向服务器端请求某个RobotId的视频流，服务器端才开始推送视频流。
-// 机器人客户端应用某种方式监听来自用户的订阅请求，以在订阅产生时开始推送视频流。
+// 服务端在每个RobotId对应的videoSubscribers变为true时，向机器人客户端发送订阅通知，
+// 机器人客户端收到订阅通知后，开始向服务端推送视频流数据。
 func (s *robotClientServer) PushVideoStream(stream pb.RobotClientService_PushVideoStreamServer) error {
-	for {
-		frame, err := stream.Recv()
-		if err != nil {
-			log.Printf("Error receiving video frame: %v", err)
-			return err
+	// Receive RobotId from the stream for identifying the video queue
+	var robotId string
+	if req, err := stream.Recv(); err == nil {
+		s.mu.Lock()
+		videoQueue, exists := videoQueues[robotId]
+		if !exists {
+			s.mu.Unlock()
+			return errors.New("video queue not available for robot")
 		}
-		log.Printf("Received video frame of length %d", len(frame.Data))
+		s.mu.Unlock()
+
+		// Continuously receive video frames and push to the queue
+		for {
+			frame, err := stream.Recv()
+			if err != nil {
+				log.Printf("Error receiving video frame: %v", err)
+				return err
+			}
+
+			// Push the received frame to the queue (non-blocking)
+			select {
+			case videoQueue <- frame:
+				log.Printf("Received video frame for robot ID %s", robotId)
+			default:
+				log.Printf("Video queue for robot ID %s is full, dropping frame", robotId)
+			}
+		}
 	}
+	return nil
 }
 
 // PullCommand 实现

@@ -50,7 +50,7 @@ message CommandResponse {
 
 // 定义机器人监听指令队列请求（服务器将依靠该请求来建立队列）
 message ListenToCommandQueueRequest {
-  int32 robot_id = 1;
+  RobotId robot_id = 1;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -83,6 +83,11 @@ message PullVideoRequest {
   RobotId robot_id = 1;
   // XXX: 目前该参数仅作为示例。
   int32 cam_id = 2;
+}
+
+// CYF:机器人客户端向服务端请求订阅通知流
+message ListenToSubscriptionRequest {
+  RobotId robot_id = 1;
 }
 
 // CYF: 服务端向机器人发送的订阅通知，表示某机器人已经被用户订阅视频流，通知机器人开始推送视频流
@@ -120,9 +125,14 @@ service UserClientService {
 
 // 机器人客户端服务
 service RobotClientService {
+  // 订阅通知服务
+  // CYF:Server-side streaming RPC，机器人请求服务器建立通知流，
+  // 服务器在收到来自用户的订阅请求后向通知流中写入通知，通知机器人开始推送视频流
+  rpc SubscribeNotify (ListenToSubscriptionRequest) returns (stream SubscribedNotification);
   // 机器人向服务器push视频流。
   // XXX: 当机器人作为服务器时，直接响应 PullVideoStream。
-  rpc PushVideoStream (stream VideoFrame) returns (stream SubscribedNotification);
+  rpc PushVideoStream (stream VideoFrame) returns (google.protobuf.Empty);
+
 
   // 机器人接收指令
   // 服务器有一指令队列，机器人从队列中取出指令并执行

@@ -331,6 +331,7 @@ var UserClientService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
+	RobotClientService_SubscribeNotify_FullMethodName     = "/remote_control_gRPC.RobotClientService/SubscribeNotify"
 	RobotClientService_PushVideoStream_FullMethodName     = "/remote_control_gRPC.RobotClientService/PushVideoStream"
 	RobotClientService_PullCommand_FullMethodName         = "/remote_control_gRPC.RobotClientService/PullCommand"
 	RobotClientService_PushStatus_FullMethodName          = "/remote_control_gRPC.RobotClientService/PushStatus"
@@ -344,9 +345,13 @@ const (
 //
 // 机器人客户端服务
 type RobotClientServiceClient interface {
+	// 订阅通知服务
+	// CYF:Server-side streaming RPC，机器人请求服务器建立通知流，
+	// 服务器在收到来自用户的订阅请求后向通知流中写入通知，通知机器人开始推送视频流
+	SubscribeNotify(ctx context.Context, in *ListenToSubscriptionRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[SubscribedNotification], error)
 	// 机器人向服务器push视频流。
 	// XXX: 当机器人作为服务器时，直接响应 PullVideoStream。
-	PushVideoStream(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[VideoFrame, SubscribedNotification], error)
+	PushVideoStream(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[VideoFrame, emptypb.Empty], error)
 	// 机器人接收指令
 	// 服务器有一指令队列，机器人从队列中取出指令并执行
 	// 服务器中的指令队列将依靠ListenToCommandQueueRequest请求建立，为每个robot id创建一个队列
@@ -367,22 +372,41 @@ func NewRobotClientServiceClient(cc grpc.ClientConnInterface) RobotClientService
 	return &robotClientServiceClient{cc}
 }
 
-func (c *robotClientServiceClient) PushVideoStream(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[VideoFrame, SubscribedNotification], error) {
+func (c *robotClientServiceClient) SubscribeNotify(ctx context.Context, in *ListenToSubscriptionRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[SubscribedNotification], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &RobotClientService_ServiceDesc.Streams[0], RobotClientService_PushVideoStream_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &RobotClientService_ServiceDesc.Streams[0], RobotClientService_SubscribeNotify_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &grpc.GenericClientStream[VideoFrame, SubscribedNotification]{ClientStream: stream}
+	x := &grpc.GenericClientStream[ListenToSubscriptionRequest, SubscribedNotification]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
 	return x, nil
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type RobotClientService_PushVideoStreamClient = grpc.BidiStreamingClient[VideoFrame, SubscribedNotification]
+type RobotClientService_SubscribeNotifyClient = grpc.ServerStreamingClient[SubscribedNotification]
+
+func (c *robotClientServiceClient) PushVideoStream(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[VideoFrame, emptypb.Empty], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &RobotClientService_ServiceDesc.Streams[1], RobotClientService_PushVideoStream_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[VideoFrame, emptypb.Empty]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type RobotClientService_PushVideoStreamClient = grpc.ClientStreamingClient[VideoFrame, emptypb.Empty]
 
 func (c *robotClientServiceClient) PullCommand(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[CommandResponse, CommandRequest], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &RobotClientService_ServiceDesc.Streams[1], RobotClientService_PullCommand_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &RobotClientService_ServiceDesc.Streams[2], RobotClientService_PullCommand_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -395,7 +419,7 @@ type RobotClientService_PullCommandClient = grpc.BidiStreamingClient[CommandResp
 
 func (c *robotClientServiceClient) PushStatus(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[Status, emptypb.Empty], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &RobotClientService_ServiceDesc.Streams[2], RobotClientService_PushStatus_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &RobotClientService_ServiceDesc.Streams[3], RobotClientService_PushStatus_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -432,9 +456,13 @@ func (c *robotClientServiceClient) SendAuthentications(ctx context.Context, in *
 //
 // 机器人客户端服务
 type RobotClientServiceServer interface {
+	// 订阅通知服务
+	// CYF:Server-side streaming RPC，机器人请求服务器建立通知流，
+	// 服务器在收到来自用户的订阅请求后向通知流中写入通知，通知机器人开始推送视频流
+	SubscribeNotify(*ListenToSubscriptionRequest, grpc.ServerStreamingServer[SubscribedNotification]) error
 	// 机器人向服务器push视频流。
 	// XXX: 当机器人作为服务器时，直接响应 PullVideoStream。
-	PushVideoStream(grpc.BidiStreamingServer[VideoFrame, SubscribedNotification]) error
+	PushVideoStream(grpc.ClientStreamingServer[VideoFrame, emptypb.Empty]) error
 	// 机器人接收指令
 	// 服务器有一指令队列，机器人从队列中取出指令并执行
 	// 服务器中的指令队列将依靠ListenToCommandQueueRequest请求建立，为每个robot id创建一个队列
@@ -455,7 +483,10 @@ type RobotClientServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedRobotClientServiceServer struct{}
 
-func (UnimplementedRobotClientServiceServer) PushVideoStream(grpc.BidiStreamingServer[VideoFrame, SubscribedNotification]) error {
+func (UnimplementedRobotClientServiceServer) SubscribeNotify(*ListenToSubscriptionRequest, grpc.ServerStreamingServer[SubscribedNotification]) error {
+	return status.Errorf(codes.Unimplemented, "method SubscribeNotify not implemented")
+}
+func (UnimplementedRobotClientServiceServer) PushVideoStream(grpc.ClientStreamingServer[VideoFrame, emptypb.Empty]) error {
 	return status.Errorf(codes.Unimplemented, "method PushVideoStream not implemented")
 }
 func (UnimplementedRobotClientServiceServer) PullCommand(grpc.BidiStreamingServer[CommandResponse, CommandRequest]) error {
@@ -491,12 +522,23 @@ func RegisterRobotClientServiceServer(s grpc.ServiceRegistrar, srv RobotClientSe
 	s.RegisterService(&RobotClientService_ServiceDesc, srv)
 }
 
-func _RobotClientService_PushVideoStream_Handler(srv interface{}, stream grpc.ServerStream) error {
-	return srv.(RobotClientServiceServer).PushVideoStream(&grpc.GenericServerStream[VideoFrame, SubscribedNotification]{ServerStream: stream})
+func _RobotClientService_SubscribeNotify_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ListenToSubscriptionRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(RobotClientServiceServer).SubscribeNotify(m, &grpc.GenericServerStream[ListenToSubscriptionRequest, SubscribedNotification]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type RobotClientService_PushVideoStreamServer = grpc.BidiStreamingServer[VideoFrame, SubscribedNotification]
+type RobotClientService_SubscribeNotifyServer = grpc.ServerStreamingServer[SubscribedNotification]
+
+func _RobotClientService_PushVideoStream_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(RobotClientServiceServer).PushVideoStream(&grpc.GenericServerStream[VideoFrame, emptypb.Empty]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type RobotClientService_PushVideoStreamServer = grpc.ClientStreamingServer[VideoFrame, emptypb.Empty]
 
 func _RobotClientService_PullCommand_Handler(srv interface{}, stream grpc.ServerStream) error {
 	return srv.(RobotClientServiceServer).PullCommand(&grpc.GenericServerStream[CommandResponse, CommandRequest]{ServerStream: stream})
@@ -566,9 +608,13 @@ var RobotClientService_ServiceDesc = grpc.ServiceDesc{
 	},
 	Streams: []grpc.StreamDesc{
 		{
+			StreamName:    "SubscribeNotify",
+			Handler:       _RobotClientService_SubscribeNotify_Handler,
+			ServerStreams: true,
+		},
+		{
 			StreamName:    "PushVideoStream",
 			Handler:       _RobotClientService_PushVideoStream_Handler,
-			ServerStreams: true,
 			ClientStreams: true,
 		},
 		{
