@@ -227,8 +227,31 @@ type robotClientServer struct {
 // 机器人连接认证后发送的请求，用于请求建立订阅通知流
 // 服务端在RobotId对应的videoSubscribers变为true时，向机器人客户端发送订阅通知，
 // 机器人客户端收到订阅通知后，开始向服务端推送视频流数据。
-func (s *robotClientServer) SubscribeNotify(stream pb.RobotClientService_SubscribeNotifyServer) error {
+func (s *robotClientServer) SubscribeNotify(req *pb.ListenToSubscriptionRequest, stream pb.RobotClientService_SubscribeNotifyServer) error {
+	robotId := req.RobotId.Id
+	log.Printf("Robot ID %s is requesting subscription notifications", robotId)
 
+	for {
+		// 监听订阅状态变化
+		s.mu.Lock()
+		subscribed := isSubscribed[robotId]
+		s.mu.Unlock()
+
+		if subscribed {
+			notification := &pb.SubscribedNotification{
+				RobotId: &pb.RobotId{Id: robotId},
+				Message: "Video stream subscribed",
+			}
+			if err := stream.Send(notification); err != nil {
+				log.Printf("Error sending subscribed notification to robot ID %s: %v", robotId, err)
+				return err
+			}
+			s.mu.Lock()
+			isSubscribed[robotId] = false // 重置订阅状态
+			s.mu.Unlock()
+		}
+		time.Sleep(1 * time.Second) // 避免过于频繁的轮询
+	}
 }
 
 // PushVideoStream 实现

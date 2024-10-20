@@ -92,7 +92,7 @@ message ListenToSubscriptionRequest {
 
 // CYF: 服务端向机器人发送的订阅通知，表示某机器人已经被用户订阅视频流，通知机器人开始推送视频流
 message SubscribedNotification {
-  int32 cam_id = 1;
+  bool is_subscribed = 1;
 }
 
 message VideoFrame {
